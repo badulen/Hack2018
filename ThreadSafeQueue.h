@@ -39,6 +39,7 @@
 #include <memory>
 #include <chrono>
 #include <stdint.h>
+#include <set>
 
 //------------------------------------------------------------------------------
 // Project include files.
@@ -114,6 +115,7 @@ public:
         std::lock_guard<std::mutex> theMutex(m_mutex);
         MakeRoom();
         m_queue.push_back(item);
+        m_set.insert(item.seqNumber);
         m_conditionVariable.notify_one();
     }
 
@@ -125,6 +127,7 @@ public:
         std::lock_guard<std::mutex> theMutex(m_mutex);
         MakeRoom();
         m_queue.push_back(std::move(item));
+        m_set.insert(item.seqNumber);
         m_conditionVariable.notify_one();
     }
 
@@ -136,6 +139,7 @@ public:
         std::unique_lock<std::mutex> theMutex(m_mutex);
         m_conditionVariable.wait(theMutex, [this]{ return !m_queue.empty(); });
         T item = std::move(m_queue.front());
+        m_set.erase(item.seqNumber);
         m_queue.pop_front();
         return item;
     }
@@ -174,6 +178,7 @@ public:
         if (Wait(duration, theMutex))
         {
             item = std::move(m_queue.front());
+            m_set.erase(item.seqNumber);
             m_queue.pop_front();
             return true;
         }
@@ -250,6 +255,11 @@ public:
         std::list<T>().swap(m_queue);
     }
 
+    int Count(int seqNumber)
+    {
+        std::lock_guard<std::mutex> theMutex(m_mutex);
+        return m_set.count(seqNumber);
+    }
 protected:
     void MakeRoom()
     {
@@ -321,6 +331,7 @@ protected:
     std::list<T>            m_queue;
     std::condition_variable m_conditionVariable;
     uint32_t                m_maxEntries;
+    std::set<int>           m_set;
 };
 
 //------------------------------------------------------------------------------

@@ -21,13 +21,13 @@ extern "C" {
 
 #include "ThreadSafeQueue.h"
 #include <thread>
-#include <set>
+#include <stdint.h>
 
 namespace
 {
     const int RTP_PACKET_SIZE{1328};
     const int MAXBUFSIZE{65536};
-    std::set<int> PacketRcvSet{};
+
 }
 
 // Define a Hackathon RTP packet
@@ -272,10 +272,9 @@ public:
                 RtpHackPacket pkt{buffer};
 
                 // If packet not present save it
-                if (PacketRcvSet.count(pkt.seqNumber) == 0)
+                if (RxQueue.Count(pkt.seqNumber) == 0)
                 {
                     printf("\nInserting pkt\n");
-                    PacketRcvSet.insert(pkt.seqNumber);
                     RxQueue.Push(std::move(pkt));
                 }
                 else
