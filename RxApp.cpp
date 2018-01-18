@@ -16,17 +16,32 @@ extern "C" {
 #include <errno.h>
 #include <time.h>
 #include <signal.h>
+#include <cstring>
 }
 
 #include "ThreadSafeQueue.h"
 #include <thread>
+#include <set>
 
-#define MAXBUFSIZE 65536
+namespace
+{
+    const int RTP_PACKET_SIZE{1328};
+    const int MAXBUFSIZE{65536};
+    std::set<int> PacketRcvSet{};
+}
 
 // Define a Hackathon RTP packet
-struct HackPacket
+struct RtpHackPacket
 {
-    unsigned long seqNumber;
+    RtpHackPacket(unsigned char* data)
+    {
+        seqNumber = (data[2]<<8) + data[3];
+        printf("\nSeq Number %d\n", seqNumber);
+        std::memcpy(m_data, data, RTP_PACKET_SIZE);
+    }
+
+    int seqNumber;
+    unsigned char* m_data[RTP_PACKET_SIZE];
 };
 
 static int sock = -1;
@@ -35,8 +50,8 @@ static struct timespec start_time;
 static unsigned long grabbed_bytes = 0;
 //unsigned long grab_bytes = 10L * 1024L * 1024L;
 unsigned long grab_bytes = 0;
-ThreadSafeQueue<HackPacket> RxQueue{};
 unsigned char buffer[MAXBUFSIZE];
+    ThreadSafeQueue<RtpHackPacket> RxQueue{};
 
 //***********************************************************************************
 // Helper Methods
@@ -252,6 +267,23 @@ public:
             else
             {
                 printf("\nGot Data!\n");
+                printf("\nRead %d bytes!\n", status);
+
+                RtpHackPacket pkt{buffer};
+
+                // If packet not present save it
+                if (PacketRcvSet.count(pkt.seqNumber) == 0)
+                {
+                    printf("\nInserting pkt\n");
+                    PacketRcvSet.insert(pkt.seqNumber);
+                    RxQueue.Push(std::move(pkt));
+                }
+                else
+                {
+                    printf("\nAlready have pkt\n");
+                }
+
+
     //                if ((do_drop_nulls) && ((status % 188) != 0))
     //                {
     //                    fprintf(stderr, "Incomplete TS packet received. Disabling null dropping\n");
