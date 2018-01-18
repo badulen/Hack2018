@@ -1,0 +1,67 @@
+#
+# Common settings for makefile, copied from CSAV3 project
+#
+# This file may be included in a makefile using the include directive
+#
+CC = gcc
+CXX = g++
+INCDIR = -I. -I..
+#-I$(XILINX_VIVADO)/../../Vivado_HLS/2016.3/include
+LIBDIR = -L. -L..
+OPT =
+DEBUG =
+## Build with maximum gcc warning level
+CFLAGS = -Wall $(INCDIR) $(DEBUG) $(OPT) $(EXTRACFLAGS)
+CPPFLAGS = $(EXTRACPPFLAGS)
+LIBS   =  -lstdc++ -lm $(EXTRA_LIBS)
+
+#
+# Automatic dependency generation from
+# http://make.mad-scientist.net/papers/advaced-auto-dependency-generation/
+#
+DEPDIR := .d
+$(shell mkdir -p $(DEPDIR) >/dev/null)
+DEPFLAGS = -MT $@ -MMD -MP -MF $(DEPDIR)/$*.Td
+
+COMPILE.c  = $(CC)  $(DEPFLAGS) $(CFLAGS) $(CPPFLAGS) $(TARGET_ARCH) -c
+COMPILE.cc = $(CXX) $(DEPFLAGS) $(CFLAGS) $(CPPFLAGS) $(TARGET_ARCH) -c
+POSTCOMPILE = mv -f $(DEPDIR)/$*.Td $(DEPDIR)/$*.d
+
+%.o : %.c
+%.o : %.c $(DEPDIR)/%.d
+	$(COMPILE.c) $(OUTPUT_OPTION) $<
+	$(POSTCOMPILE)
+
+%.o : %.cc
+%.o : %.cc $(DEPDIR)/%.d
+	$(COMPILE.cc) $(OUTPUT_OPTION) $<
+	$(POSTCOMPILE)
+
+%.o : %.cxx
+%.o : %.cxx $(DEPDIR)/%.d
+	$(COMPILE.cc) $(OUTPUT_OPTION) $<
+	$(POSTCOMPILE)
+
+%.o : %.cpp
+%.o : %.cpp $(DEPDIR)/%.d
+	$(COMPILE.cc) $(OUTPUT_OPTION) $<
+	$(POSTCOMPILE)
+
+$(DEPDIR)/%.d: ;
+.PRECIOUS: $(DEPDIR)/%.d
+
+
+
+EXE	= $(MODULE)
+
+.PHONY: clean
+
+$(EXE): $(OBJS)
+	$(CC) $(CFLAGS) $(INCDIR) $(LIBDIR) -o $@ $(OBJS) $(LIBS) 2>&1 | c++filt
+
+clean:
+	-rm -f $(OBJS) *~ $(EXE) *.P *.log .d/*
+
+ALLSRCS = $(CSRCS) $(SRCS)
+-include $(patsubst %,$(DEPDIR)/%.d,$(basename $(ALLSRCS)))
+
