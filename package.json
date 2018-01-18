@@ -1,0 +1,11 @@
+{
+  "name": "node_multicast_rproxy",
+  "version": "0.0.1",
+  "description": "multicast forwarding proxy with packet fiddling :-)",
+  "main": "proxy.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "author": "",
+  "license": "Public Domain"
+}
