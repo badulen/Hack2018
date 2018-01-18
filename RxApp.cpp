@@ -28,6 +28,9 @@ namespace
     const int RTP_PACKET_SIZE{1328};
     const int MAXBUFSIZE{65536};
 
+    const char *multicast_ip = "239.99.1.1";
+    short multicast_port = 5000;
+
 }
 
 // Define a Hackathon RTP packet
@@ -36,7 +39,7 @@ struct RtpHackPacket
     RtpHackPacket(unsigned char* data)
     {
         seqNumber = (data[2]<<8) + data[3];
-        printf("\nSeq Number %d\n", seqNumber);
+//        printf("\nSeq Number %d\n", seqNumber);
         std::memcpy(m_data, data, RTP_PACKET_SIZE);
     }
 
@@ -144,9 +147,7 @@ class Receiver
 {
 public:
 
-    const char *listen_ip = "239.2.41.1";
-    unsigned short listen_port = 1234;
-    const char *ifceName = "enp1s0";
+
     Receiver( const char *listen_ip, unsigned short listen_port, const char *ifceName)
     {
         m_sock = -1;
@@ -194,34 +195,31 @@ public:
         imreq.imr_multiaddr.s_addr = inet_addr(listen_ip);
         imreq.imr_interface.s_addr = INADDR_ANY; // use DEFAULT interface
 
-        if (strcmp(ifceName, "default") != 0)
+        struct ifaddrs *ifap;
+        struct ifaddrs *ifa;
+
+        if (getifaddrs(&ifap) != 0)
         {
-            struct ifaddrs *ifap;
-            struct ifaddrs *ifa;
+            perror("getifaddrs() failed");
+            close(m_sock);
+            exit(-1);
+        }
 
-            if (getifaddrs(&ifap) != 0)
+        for (ifa = ifap; ifa != NULL; ifa = ifa->ifa_next)
+        {
+            if ((ifa->ifa_addr->sa_family == AF_INET) && (strcmp(ifceName, ifa->ifa_name) == 0))
             {
-                perror("getifaddrs() failed");
-                close(m_sock);
-                exit(-1);
+                imreq.imr_interface.s_addr = ((struct sockaddr_in*)(ifa->ifa_addr))->sin_addr.s_addr;
+                break;
             }
+        }
 
-            for (ifa = ifap; ifa != NULL; ifa = ifa->ifa_next)
-            {
-                if ((ifa->ifa_addr->sa_family == AF_INET) && (strcmp(ifceName, ifa->ifa_name) == 0))
-                {
-                    imreq.imr_interface.s_addr = ((struct sockaddr_in*)(ifa->ifa_addr))->sin_addr.s_addr;
-                    break;
-                }
-            }
-
-            freeifaddrs(ifap);
-            if (ifa == NULL)
-            {
-                fprintf(stderr, "\nInterface '%s' not found\n", ifceName);
-                close(m_sock);
-                exit(-1);
-            }
+        freeifaddrs(ifap);
+        if (ifa == NULL)
+        {
+            fprintf(stderr, "\nInterface '%s' not found\n", ifceName);
+            close(m_sock);
+            exit(-1);
         }
 
 
@@ -234,19 +232,23 @@ public:
         }
 
 
-        SetRcvBufSize(sock);
+        SetRcvBufSize(m_sock);
 
         socklen = sizeof(struct sockaddr_in);
 
-        m_thread = std::thread{&Receiver::Start, this};
-        m_thread.detach();
+        printf("Listening for multicast packets on %s:%u\n", listen_ip, listen_port);
     }
 
     void Start()
     {
+        m_thread = std::thread{&Receiver::Execute, this};
+        printf("Sending Packets on %s:%u\n", multicast_ip, multicast_port);
+    }
+
+    void Execute()
+    {
         printf("\nStarting Thread\n");
 
-        printf("Listening for multicast packets on %s:%u\n", listen_ip, listen_port);
         while (true)
         {
             // receive packet from socket
@@ -266,70 +268,21 @@ public:
             }
             else
             {
-                printf("\nGot Data!\n");
-                printf("\nRead %d bytes!\n", status);
+ //               printf("\nGot Data!\n");
+ //               printf("\nRead %d bytes!\n", status);
 
                 RtpHackPacket pkt{buffer};
 
                 // If packet not present save it
                 if (RxQueue.Count(pkt.seqNumber) == 0)
                 {
-                    printf("\nInserting pkt\n");
+//                    printf("\nInserting pkt\n");
                     RxQueue.Push(std::move(pkt));
                 }
                 else
                 {
-                    printf("\nAlready have pkt\n");
+//                    printf("\nAlready have pkt\n");
                 }
-
-
-    //                if ((do_drop_nulls) && ((status % 188) != 0))
-    //                {
-    //                    fprintf(stderr, "Incomplete TS packet received. Disabling null dropping\n");
-    //                    do_drop_nulls = 0;
-    //                }
-    //
-    //                if (do_drop_nulls)
-    //                {
-    //                    int pkt;
-    //                    for (pkt = 0; pkt < status/188; pkt ++)
-    //                    {
-    //                        if (((buffer[pkt*188 + 2]) != 0xff) ||
-    //                            ((buffer[pkt*188 + 1] & 0x1f) != 0x1f))
-    //                        {
-    //                            if (fwrite(&buffer[pkt * 188], 1, 188, fout) != 188)
-    //                            {
-    //                                perror("fwrite");
-    //                                exit(-1);
-    //                            }
-    //                        }
-    //                    }
-    //                }
-    //                else if (fwrite(buffer, 1, status, fout) != (unsigned)status)
-    //                {
-    //                    perror("fwrite");
-    //                    exit(-1);
-    //                }
-    //
-    //                fflush(fout);
-    //
-    //                if (grabbed_bytes == 0)
-    //                {
-    //                    if (fout != stdout)
-    //                    {
-    //                        printf("Grabbing.");
-    //                        fflush(stdout);
-    //                    }
-    //                }
-    //                else if ((grabbed_bytes & 0xfff00000) != ((grabbed_bytes + status) & 0xfff00000))
-    //                {
-    //                    if (fout != stdout)
-    //                    {
-    //                        printf(".");
-    //                        fflush(stdout);
-    //                    }
-    //                }
-    //            grabbed_bytes += status;
             }
         }
     }
@@ -343,6 +296,252 @@ private:
     socklen_t socklen;
 };
 
+//***********************************************************************************
+// Playout Class
+//***********************************************************************************
+class Player
+{
+public:
+
+    Player()
+    {
+        FILE *fin;
+        unsigned char pkt[188];
+        unsigned int pid_count[8192];
+        long long first_pcr27mhz = -1;
+        long first_pcrpos = -1;
+        unsigned int calc_pid = 0xffff;
+        int status;
+        struct in_addr iaddr;
+        const unsigned char ttl = 3;
+        const unsigned char one = 1;
+        long long total_sent = 0;
+        int loop_count = 0;
+        int i;
+        long filesize = 0;
+
+        multicast_ip = "239.32.32.32";
+        multicast_port = 1234;
+        const char *ifceName = "enp1s0";
+
+        memset(pid_count, 0, sizeof(pid_count));
+
+        // set content of struct saddr and imreq to zero
+        memset(&saddr, 0, sizeof(struct sockaddr_in));
+        memset(&iaddr, 0, sizeof(struct in_addr));
+
+        // open a UDP socket
+        m_sock = socket(PF_INET, SOCK_DGRAM, 0);
+        if (m_sock < 0)
+        {
+            perror("Error creating socket");
+            exit(-1);
+        }
+
+    int yes = 1;
+    status = setsockopt(m_sock, SOL_SOCKET, SO_REUSEADDR, &yes, sizeof(int));
+
+    if (status < 0 )
+    {
+            printf("Error setting socket options\n\n");
+            exit(1);
+    }
+
+    /* Bind to particular interface only (e.g. eth1) */
+    if ((status = setsockopt(m_sock, SOL_SOCKET, SO_BINDTODEVICE, ifceName, strlen(ifceName))) < 0)
+    {
+        perror("setsockopt() error for SO_BINDTODEVICE");
+        printf("%s\n", strerror(errno));
+        close(sock);
+        exit(-1);
+    }
+
+    saddr.sin_family = PF_INET;
+    saddr.sin_port = htons(0); // Use the first free port
+    saddr.sin_addr.s_addr = htonl(INADDR_ANY); // bind socket to any interface
+    status = bind(m_sock, (struct sockaddr *)&saddr, sizeof(struct sockaddr_in));
+
+    if ( status < 0 )
+    {
+        perror("Error binding socket to interface");
+        exit(0);
+    }
+
+    iaddr.s_addr = htonl(INADDR_ANY); // use DEFAULT interface
+
+    // Set the outgoing interface to DEFAULT
+    status =setsockopt(m_sock, IPPROTO_IP, IP_MULTICAST_IF, &iaddr, sizeof(struct in_addr));
+    if (status < 0)
+    {
+        printf("Failed to set sock opt");
+        exit(0);
+    }
+
+    // Set multicast packet TTL to 3; default TTL is 1
+    status =setsockopt(m_sock, IPPROTO_IP, IP_MULTICAST_TTL, &ttl, sizeof(unsigned char));
+    if (status < 0)
+    {
+        printf("Failed to set sock opt");
+        exit(0);
+    }
+
+    // send multicast traffic to myself too
+    status = setsockopt(m_sock, IPPROTO_IP, IP_MULTICAST_LOOP, &one, sizeof(unsigned char));
+    if (status < 0)
+    {
+        printf("Failed to set sock opt");
+        exit(0);
+    }
+
+    // set destination multicast address
+    saddr.sin_family = PF_INET;
+    saddr.sin_addr.s_addr = inet_addr(multicast_ip);
+    saddr.sin_port = htons(multicast_port);
+
+//    // sync byte                        8   0x47
+//    // Transport Error Indicator (TEI)  1   Set by demodulator if can't correct errors in the stream, to tell the demultiplexer that the packet has an uncorrectable error [11]
+//    // Payload Unit Start Indicator     1   1 means start of PES data or PSI otherwise zero only.
+//    // Transport Priority               1   1 means higher priority than other packets with the same PID.
+//    // PID                              13  Packet ID
+//    // Scrambling control               2   '00' = Not scrambled.   The following per DVB spec:[12]   '01' = Reserved for future use,   '10' = Scrambled with even key,   '11' = Scrambled with odd key
+//    // Adaptation field exist           2   01 = no adaptation fields, payload only, 10 = adaptation field only, 11 = adaptation field and payload
+//    // Continuity counter               4   Incremented only when a payload is present (i.e., adaptation field exist is 01 or 11)[13]
+//    // Adaptation field                 0 or more   Depends on flags
+//    // Payload Data                     0 or more   Depends on flags
+//
+//    // Adaptation Field Length                  8   Number of bytes in the adaptation field immediately following this byte
+//    // Discontinuity indicator                  1   Set to 1 if current TS packet is in a discontinuity state with respect to either the continuity counter or the program clock reference
+//    // Random Access indicator                  1   Set to 1 if the PES packet in this TS packet starts a video/audio sequence
+//    // Elementary stream priority indicator     1   1 = higher priority
+//    // PCR flag                                 1   1 means adaptation field does contain a PCR field
+//    // OPCR flag                                1   1 means adaptation field does contain an OPCR field
+//    // Splicing point flag                      1   1 means presence of splice countdown field in adaptation field
+//    // Transport private data flag              1   1 means presence of private data bytes in adaptation field
+//    // Adaptation field extension flag          1   1 means presence of adaptation field extension
+//
+//    // PCR                                      33+9    Program clock reference, stored in 6 octets in big-endian as 33 bits base, 6 bits padding, 9 bits extension.
+//    // OPCR                                     33+9    Original Program clock reference. Helps when one TS is copied into another
+//    // Splice countdown                         8   Indicates how many TS packets from this one a splicing point occurs (may be negative)
+//    // stuffing bytes                           variable
+//
+
+    }
+
+    void Start()
+    {
+        m_thread = std::thread{&Player::Execute, this};
+        printf("Sending Packets on %s:%u\n", multicast_ip, multicast_port);
+    }
+
+    void Execute()
+    {
+        printf("\nStarting Playout Thread\n");
+
+        while(true)
+//        for (int loop_count = 0; true; loop_count ++)
+        {
+            static int seqPlay{0};
+//            if (RxQueue.Count(seqPlay))
+//            {
+                auto pkt = RxQueue.WaitAndPop();
+                seqPlay++;
+  //              printf("\nFound packet to play! %d, %d\n", seqPlay, pkt.seqNumber);
+                socklen_t socklen = sizeof(struct sockaddr_in);
+
+                int status = sendto(m_sock, pkt.m_data, RTP_PACKET_SIZE, 0, (struct sockaddr *)&saddr, socklen);
+                if (status < 0)
+                {
+                    perror("sendto() error");
+                    printf("%s\n", strerror(errno));
+                }
+                else
+                {
+//                    printf("\nPalyed Packet\n");
+                }
+
+
+//            }
+//            else
+//            {
+//                printf("\nCan't play, wait\n");
+//                sleep(10);
+//            }
+        }
+//        if ((loop_count == 0) && (! do_calc_rate))
+//        {
+//            printf("Starting to transmit on rtp://%s:%u\n", multicast_ip, multicast_port);
+//            clock_gettime(CLOCK_MONOTONIC, &start_time);
+//        }
+//
+//        if (fseek(fin, 0, SEEK_SET)) // seek back to beginning of file
+//        {
+//            perror("fseek");
+//            exit(-1);
+//        }
+//
+//        while (!feof(fin))
+//        {
+//            int ch = fgetc(fin);
+//            if (ch < 0)
+//            {
+//                // EOF
+//                break;
+//            }
+//
+//            if (ch != 0x47)
+//            {
+//                unsigned int pos = ftell(fin) - 1;
+//                unsigned int pos2;
+//
+//                printf("WARNING: TS Sync Byte incorrect. Expected 0x47. Got 0x%02x (at %u)\n", (pkt[0]&0xff), pos);
+//
+//                while (ch >= 0 && ch != 0x47)
+//                {
+//                    ch = fgetc(fin);
+//                }
+//                pos2 = ftell(fin) - 1;    // Position of sync byte
+//                printf("Skipped %u bytes\n", pos2 - pos);
+//
+//                if (ch < 0)
+//                {
+//                    // EOF
+//                    break;
+//                }
+//                pos = pos2;
+//            }
+//
+//            pkt[0] = ch;
+//            if (fread(pkt+1, 1, 187, fin) != 187)
+//            {
+//                printf("EOF\n");
+//                continue;
+//            }
+//
+//            unsigned int pid = ((pkt[1] & 0x1f) << 8) | pkt[2];
+//
+//            pid_count[pid]++;
+//
+//            if (send_packet(sock, pkt, (struct sockaddr *)&saddr, socklen))
+//            {
+//                rate_limit(total_sent + fpos);
+//            }
+//        }
+//    }
+    }
+
+private:
+
+    std::thread m_thread;
+    int m_sock;
+    struct sockaddr_in saddr;
+    struct ip_mreq imreq;
+    socklen_t socklen;
+};
+
+
+//***********************************************************************************
+// Main
+//***********************************************************************************
 int main()
 {
     printf("\nStarting RX script\n");
@@ -354,6 +553,13 @@ int main()
     rxOne.Start();
     rxTwo.Start();
 
+    printf("\nCreating Player 1\n");
+    Player txOne{};
+    txOne.Start();
+
+    while(true)
+    {
+    }
     return 0;
 }
 
