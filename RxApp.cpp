@@ -20,8 +20,13 @@ extern "C" {
 }
 
 #include "ThreadSafeQueue.h"
+//#include "ThreadSafeSet.h"
 #include <thread>
 #include <stdint.h>
+#include <set>
+#include <mutex>
+#include <condition_variable>
+#include <algorithm>
 
 namespace
 {
@@ -31,6 +36,11 @@ namespace
     const char *multicast_ip = "239.99.1.1";
     short multicast_port = 5000;
 
+    std::mutex m_mutex;
+//    std::mutex m_condVariableMutex;
+    std::condition_variable m_condVariable;
+    int nextSeqToPlay{0};
+    bool play{false};
 }
 
 // Define a Hackathon RTP packet
@@ -42,6 +52,11 @@ struct RtpHackPacket
 //        printf("\nSeq Number %d\n", seqNumber);
         std::memcpy(m_data, data, RTP_PACKET_SIZE);
     }
+
+        bool operator<(const RtpHackPacket &rhs) const
+        {
+            return seqNumber < rhs.seqNumber;
+        }
 
     int seqNumber;
     unsigned char* m_data[RTP_PACKET_SIZE];
@@ -55,6 +70,7 @@ static unsigned long grabbed_bytes = 0;
 unsigned long grab_bytes = 0;
 unsigned char buffer[MAXBUFSIZE];
     ThreadSafeQueue<RtpHackPacket> RxQueue{};
+std::set<RtpHackPacket> RxSet{};
 
 //***********************************************************************************
 // Helper Methods
@@ -150,6 +166,7 @@ public:
 
     Receiver( const char *listen_ip, unsigned short listen_port, const char *ifceName)
     {
+        first = true;
         m_sock = -1;
 
         int status;
@@ -269,26 +286,34 @@ public:
             else
             {
  //               printf("\nGot Data!\n");
- //               printf("\nRead %d bytes!\n", status);
+//               printf("\nRead %d bytes!\n", status);
 
                 RtpHackPacket pkt{buffer};
 
-                // If packet not present save it
-                if (RxQueue.Count(pkt.seqNumber) == 0)
+                std::unique_lock<std::mutex> lck(m_mutex);
+                if (first)
                 {
-//                    printf("\nInserting pkt\n");
-                    RxQueue.Push(std::move(pkt));
+                    nextSeqToPlay = pkt.seqNumber;
+                    first = false;
                 }
-                else
+
+                printf("Inserting packet %d\n", pkt.seqNumber);
+                auto ret = RxSet.insert(std::move(pkt));
+                if (ret.second)
                 {
-//                    printf("\nAlready have pkt\n");
+                    // trigger cond
+                    play = true;
+                    m_condVariable.notify_all();
+                    while (play) m_condVariable.wait(lck);
                 }
+                //m_mutex.unlock();
             }
         }
     }
 
 private:
 
+    bool first;
     std::thread m_thread;
     int m_sock;
     struct sockaddr_in saddr;
@@ -437,15 +462,38 @@ public:
     {
         printf("\nStarting Playout Thread\n");
 
+        //while (RxSet.empty())
+        //{
+        //    std::this_thread::sleep_for(std::chrono::seconds(1));
+        //}
+
+
+        unsigned char tmp[MAXBUFSIZE];
+        static RtpHackPacket seqPlay{tmp};
+
+        static bool setFirstPacket{true};
         while(true)
 //        for (int loop_count = 0; true; loop_count ++)
         {
-            static int seqPlay{0};
-//            if (RxQueue.Count(seqPlay))
-//            {
-                auto pkt = RxQueue.WaitAndPop();
-                seqPlay++;
-  //              printf("\nFound packet to play! %d, %d\n", seqPlay, pkt.seqNumber);
+            std::set<RtpHackPacket>::iterator it{};
+            std::unique_lock<std::mutex> lck(m_mutex);
+
+            printf("\nAbout to wait\n");
+            while (!play) m_condVariable.wait(lck);
+            printf("\nDone Waiting\n");
+
+            if(setFirstPacket)
+            {
+                seqPlay.seqNumber = nextSeqToPlay;
+                printf("\nPacket to play is: %d\n", nextSeqToPlay);
+                setFirstPacket = false;
+            }
+
+            static int retries{0};
+            if((it = RxSet.find(seqPlay)) != RxSet.end())
+            {
+                auto const& pkt = *it;
+                printf("\nFound packet to play! %d, %d\n", seqPlay.seqNumber, pkt.seqNumber);
                 socklen_t socklen = sizeof(struct sockaddr_in);
 
                 int status = sendto(m_sock, pkt.m_data, RTP_PACKET_SIZE, 0, (struct sockaddr *)&saddr, socklen);
@@ -456,16 +504,25 @@ public:
                 }
                 else
                 {
-//                    printf("\nPalyed Packet\n");
+    //                    printf("\nPalyed Packet\n");
                 }
+                RxSet.erase(it);
+                play = false;
+                seqPlay.seqNumber = (seqPlay.seqNumber + 1) % 0xffff;
+                m_condVariable.notify_all();
+            }
+            else
+            {
+                printf("\nPacket not found: %d\n", seqPlay.seqNumber);
+                    printf("\nToo many retries");
+                    play = false;
+//                    seqPlay.seqNumber = (seqPlay.seqNumber + 1) % 0xffff;
+                    retries = 0;
+                    m_condVariable.notify_all();
+            }
 
-
-//            }
-//            else
-//            {
-//                printf("\nCan't play, wait\n");
-//                sleep(10);
-//            }
+//            std::this_thread::sleep_for(std::chrono::microseconds(500));
+            //m_mutex.unlock();
         }
 //        if ((loop_count == 0) && (! do_calc_rate))
 //        {
@@ -546,6 +603,11 @@ int main()
 {
     printf("\nStarting RX script\n");
 
+    printf("\nCreating Player 1\n");
+    Player txOne{};
+    txOne.Start();
+    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+
     printf("\nCreating Receiver 1\n");
     Receiver rxOne{"239.2.41.1", 1234, "enp1s0"};
     Receiver rxTwo{"239.2.41.1", 1234, "enp1s0"};
@@ -553,9 +615,10 @@ int main()
     rxOne.Start();
     rxTwo.Start();
 
-    printf("\nCreating Player 1\n");
-    Player txOne{};
-    txOne.Start();
+
+
+//    std::this_thread::sleep_for(std::chrono::milliseconds(2000));
+    //m_condVariable.notify_all();
 
     while(true)
     {
