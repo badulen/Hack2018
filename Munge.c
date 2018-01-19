@@ -23,8 +23,9 @@
  *--------------------------------------------------------------------------------------*/
 int main(int argc, char* argv[])
 {
+    int debug = 0;
     int dgramsize = 0;
-    unsigned char buf[1000000];
+    char buf[100000];
     int kill_percentage;
     char tx_mcast_dest[18];
     char rx_mcast_dest[18];
@@ -94,7 +95,7 @@ int main(int argc, char* argv[])
         printf("percentage bad = %d\n", kill_percentage);
 
     //rx socket
-    if ((error = (rx_sock = socket(AF_INET, SOCK_DGRAM, 0))) < 0)
+    if ((error = (rx_sock = socket(AF_INET, SOCK_DGRAM, IPPROTO_IP))) < 0)
     {
         printf("rx socket() creation failed with error %d\n", error);
         return 1;
@@ -192,18 +193,18 @@ int main(int argc, char* argv[])
     {
         int send_output = 0;
 
-        dgramsize = recvfrom(rx_sock, (char*)buf, 1500, 0, (struct sockaddr*)&rx_sa, &rx_salen);
+        dgramsize = recvfrom(rx_sock, buf, 1500, 0, (struct sockaddr*)&rx_sa, &rx_salen);
 
-//        printf(".");
+        if (debug) printf(".");
 
         send_output = 1;
-        if (((rand() * 10000) < (kill_percentage * 32767) || (kill_percentage == 10000)))
-            send_output = 0;
+//        if (((rand() * 10000) < (kill_percentage * 32767) || (kill_percentage == 10000)))
+//            send_output = 0;
 
         if (send_output) {
-            sendto(tx_sock, (char*)buf, dgramsize, 0, (struct sockaddr*)&tx_sa, tx_salen);
+            sendto(tx_sock, buf, dgramsize, 0, (struct sockaddr*)&tx_sa, tx_salen);
 
-            //printf("dgramsize %d\n", dgramsize);
+            if (debug) printf("dgramsize %d\n", dgramsize);
         }
     }
 
