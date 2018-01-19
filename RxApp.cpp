@@ -27,6 +27,7 @@ extern "C" {
 #include <mutex>
 #include <condition_variable>
 #include <algorithm>
+#include <fstream>
 
 namespace
 {
@@ -63,12 +64,6 @@ struct RtpHackPacket
 };
 
 static int desiredRcvBufSize = 128 * 1024 * 1024;
-static struct timespec start_time;
-static unsigned long grabbed_bytes = 0;
-//unsigned long grab_bytes = 10L * 1024L * 1024L;
-unsigned long grab_bytes = 0;
-unsigned char buffer[MAXBUFSIZE];
-    ThreadSafeQueue<RtpHackPacket> RxQueue{};
 std::set<RtpHackPacket> RxSet{};
 
 //***********************************************************************************
@@ -163,8 +158,14 @@ class Receiver
 public:
 
 
-    Receiver( const char *listen_ip, unsigned short listen_port, const char *ifceName)
+    Receiver( const char *listen_ip, unsigned short listen_port, const char *ifceName, const char* stats_file)
     {
+        m_rxPkts = 0;
+        m_statsFile = stats_file;
+
+        m_myFile.open (m_statsFile);
+        m_myFile << "Stats file for multicast " << listen_ip << ", port " << listen_port << std::endl;
+
         first = true;
         m_sock = -1;
 
@@ -200,7 +201,7 @@ public:
 
         struct timeval timeout;
         timeout.tv_sec = 0;
-        timeout.tv_usec = 50;
+        timeout.tv_usec = 10;
 //        status = setsockopt(m_sock, SOL_SOCKET, SO_RCVTIMEO, (char *)&timeout, sizeof(timeout));
 //
 //        if (status < 0 )
@@ -280,13 +281,18 @@ public:
         while (true)
         {
             // receive packet from socket
-            int status = recvfrom(m_sock, buffer, MAXBUFSIZE, 0,  (struct sockaddr *)&saddr, &socklen);
+            int status = recvfrom(m_sock, m_buffer, MAXBUFSIZE, 0,  (struct sockaddr *)&saddr, &socklen);
 
             if (status < 0)
             {
-                printf("\nError reading data!\n");
-                perror("recvfrom");
-                exit(-1);
+//                printf("\nError reading data!\n");
+//                perror("recvfrom");
+//                exit(-1)
+                std::unique_lock<std::mutex> lck(m_mutex);
+                play = true;
+                m_condVariable.notify_all();
+                while (play) m_condVariable.wait(lck);
+
             }
             else if (status == 0)
             {
@@ -302,7 +308,8 @@ public:
  //               printf("\nGot Data!\n");
 //               printf("\nRead %d bytes!\n", status);
 
-                RtpHackPacket pkt{buffer};
+                RtpHackPacket pkt{m_buffer};
+                m_myFile << "Packets received " << ++m_rxPkts << ", Seq Number " << pkt.seqNumber << std::endl;
 
                 std::unique_lock<std::mutex> lck(m_mutex);
 //                if (first)
@@ -338,6 +345,10 @@ private:
     struct sockaddr_in saddr;
     struct ip_mreq imreq;
     socklen_t socklen;
+    const char* m_statsFile;
+    std::ofstream m_myFile;
+    std::uint32_t m_rxPkts;
+    unsigned char m_buffer[MAXBUFSIZE];
 };
 
 //***********************************************************************************
@@ -516,7 +527,6 @@ public:
             }
             else
             {
-
                 if((it = RxSet.find(seqPlay)) != RxSet.end())
                 {
                     printf("\nFound packet to play! %d, %d\n", seqPlay.seqNumber, it->seqNumber);
@@ -639,11 +649,11 @@ int main()
     std::this_thread::sleep_for(std::chrono::milliseconds(100));
 
     printf("\nCreating Receiver 1\n");
-    Receiver rxOne{"239.2.41.2", 1234, "eno1"};
-    Receiver rxTwo{"239.2.41.3", 1234, "eno1"};
+    Receiver rxOne{"239.2.41.22", 1234, "eno1", "file1.txt"};
+    Receiver rxTwo{"239.2.41.33", 1234, "eno1", "file2.txt"};
 
     rxOne.Start();
-    rxTwo.Start();
+//    rxTwo.Start();
 
 //    std::this_thread::sleep_for(std::chrono::milliseconds(2000));
     //m_condVariable.notify_all();
