@@ -63,7 +63,7 @@ struct RtpHackPacket
     unsigned char* m_data[RTP_PACKET_SIZE];
 };
 
-static int desiredRcvBufSize = 128 * 1024 * 1024;
+static const int desiredRcvBufSize = 128 * 1024 * 1024;
 std::set<RtpHackPacket> RxSet{};
 
 //***********************************************************************************
@@ -159,28 +159,26 @@ public:
 
 
     Receiver( const char *listen_ip, unsigned short listen_port, const char *ifceName, const char* stats_file)
+    : first{true}
+    , m_thread{}
+    , m_sock{-1}
+    , saddr{}
+    , imreq{}
+    , socklen{}
+    , m_myFile{}
+    , m_rxPkts{}
+    , m_buffer{}
     {
         m_rxPkts = 0;
-        m_statsFile = stats_file;
-
-        m_myFile.open (m_statsFile);
+        m_myFile.open (stats_file, std::ios_base::out);
         m_myFile << "Stats file for multicast " << listen_ip << ", port " << listen_port << std::endl;
 
-        first = true;
-        m_sock = -1;
-
         int status;
-        int i;
-        int dump_pid[0x2000] = {0};
-        int do_dump = 0;
-        int do_drop_nulls = 0;
-
-        memset(dump_pid, 0, sizeof(dump_pid));
 
         // set content of struct saddr and imreq to zero
-
         memset(&saddr, 0, sizeof(struct sockaddr_in));
         memset(&imreq, 0, sizeof(struct ip_mreq));
+//        memset(&m_buffer, 0, sizeof(struct m_buffer));
 
         // open a UDP socket
         m_sock = socket(AF_INET, SOCK_DGRAM, IPPROTO_IP);
@@ -190,18 +188,26 @@ public:
             exit(-1);
         }
 
+        /* Bind to particular interface only (e.g. eth1) */
+        if ((status = setsockopt(m_sock, SOL_SOCKET, SO_BINDTODEVICE, ifceName, strlen(ifceName))) < 0)
+        {
+            perror("setsockopt() error for SO_BINDTODEVICE");
+            printf("%s\n", strerror(errno));
+            close(m_sock);
+            exit(-1);
+        }
+
         int yes = 1;
         status = setsockopt(m_sock, SOL_SOCKET, SO_REUSEADDR, &yes, sizeof(int));
-
         if (status < 0 )
         {
                 printf("Error setting socket options\n\n");
                 exit(1);
         }
 
-        struct timeval timeout;
-        timeout.tv_sec = 0;
-        timeout.tv_usec = 10;
+//        struct timeval timeout;
+//        timeout.tv_sec = 0;
+//        timeout.tv_usec = 10;
 //        status = setsockopt(m_sock, SOL_SOCKET, SO_RCVTIMEO, (char *)&timeout, sizeof(timeout));
 //
 //        if (status < 0 )
@@ -210,11 +216,10 @@ public:
 //                exit(1);
 //        }
 
-        saddr.sin_family = PF_INET;
+        saddr.sin_family = AF_INET;
         saddr.sin_port = htons(listen_port);
         saddr.sin_addr.s_addr = htonl(INADDR_ANY); // bind socket to any interface
         status = bind(m_sock, (struct sockaddr *)&saddr, sizeof(struct sockaddr_in));
-
         if ( status < 0 )
         {
             perror("\nError binding socket to interface\n");
@@ -222,7 +227,7 @@ public:
         }
 
         imreq.imr_multiaddr.s_addr = inet_addr(listen_ip);
-        imreq.imr_interface.s_addr = INADDR_ANY; // use DEFAULT interface
+        imreq.imr_interface.s_addr = htonl(INADDR_ANY); // use DEFAULT interface
 
         struct ifaddrs *ifap;
         struct ifaddrs *ifa;
@@ -251,9 +256,8 @@ public:
             exit(-1);
         }
 
-
         // JOIN multicast group on default interface
-        if ((status = setsockopt(m_sock, IPPROTO_IP, IP_ADD_MEMBERSHIP, (const void *)&imreq, sizeof(struct ip_mreq))) < 0)
+        if ((status = setsockopt(m_sock, IPPROTO_IP, IP_ADD_MEMBERSHIP, (char*)&imreq, sizeof(struct ip_mreq))) < 0)
         {
             perror("setsockopt() error for IP_ADD_MEMBERSHIP");
             close(m_sock);
@@ -261,7 +265,7 @@ public:
         }
 
 
-        SetRcvBufSize(m_sock);
+//        SetRcvBufSize(m_sock);
 
         socklen = sizeof(struct sockaddr_in);
 
@@ -308,10 +312,10 @@ public:
  //               printf("\nGot Data!\n");
 //               printf("\nRead %d bytes!\n", status);
 
-                RtpHackPacket pkt{m_buffer};
-                m_myFile << "Packets received " << ++m_rxPkts << ", Seq Number " << pkt.seqNumber << std::endl;
-
                 std::unique_lock<std::mutex> lck(m_mutex);
+                RtpHackPacket pkt{m_buffer};
+                m_myFile << ++m_rxPkts << std::endl;
+
 //                if (first)
 //                {
                     nextSeqToPlay = pkt.seqNumber;
@@ -345,7 +349,6 @@ private:
     struct sockaddr_in saddr;
     struct ip_mreq imreq;
     socklen_t socklen;
-    const char* m_statsFile;
     std::ofstream m_myFile;
     std::uint32_t m_rxPkts;
     unsigned char m_buffer[MAXBUFSIZE];
@@ -386,7 +389,7 @@ public:
         memset(&iaddr, 0, sizeof(struct in_addr));
 
         // open a UDP socket
-        m_sock = socket(PF_INET, SOCK_DGRAM, 0);
+        m_sock = socket(AF_INET, SOCK_DGRAM, 0);
         if (m_sock < 0)
         {
             perror("Error creating socket");
@@ -411,7 +414,7 @@ public:
         exit(-1);
     }
 
-    saddr.sin_family = PF_INET;
+    saddr.sin_family = AF_INET;
     saddr.sin_port = htons(0); // Use the first free port
     saddr.sin_addr.s_addr = htonl(INADDR_ANY); // bind socket to any interface
     status = bind(m_sock, (struct sockaddr *)&saddr, sizeof(struct sockaddr_in));
@@ -449,7 +452,7 @@ public:
     }
 
     // set destination multicast address
-    saddr.sin_family = PF_INET;
+    saddr.sin_family = AF_INET;
     saddr.sin_addr.s_addr = inet_addr(multicast_ip);
     saddr.sin_port = htons(multicast_port);
 
@@ -492,12 +495,6 @@ public:
     {
         printf("\nStarting Playout Thread\n");
 
-        //while (RxSet.empty())
-        //{
-        //    std::this_thread::sleep_for(std::chrono::seconds(1));
-        //}
-
-
         unsigned char tmp[MAXBUFSIZE];
         static RtpHackPacket seqPlay{tmp};
 
@@ -505,14 +502,12 @@ public:
         static int gracePktCount{0};
         static int retries{0};
         while(true)
-//        for (int loop_count = 0; true; loop_count ++)
         {
             std::set<RtpHackPacket>::iterator it{};
             std::unique_lock<std::mutex> lck(m_mutex);
 
-//            printf("\nAbout to wait\n");
             while (!play) m_condVariable.wait(lck);
-//            printf("\nDone Waiting\n");
+
             if(setFirstPacket)
             {
                 seqPlay.seqNumber = nextSeqToPlay;
@@ -649,11 +644,11 @@ int main()
     std::this_thread::sleep_for(std::chrono::milliseconds(100));
 
     printf("\nCreating Receiver 1\n");
-    Receiver rxOne{"239.2.41.22", 1234, "eno1", "file1.txt"};
-    Receiver rxTwo{"239.2.41.33", 1234, "eno1", "file2.txt"};
+    Receiver rxOne{"239.2.41.22", 1234, "enp1s0", "file1.txt"};
+    Receiver rxTwo{"239.2.41.33", 1234, "enp1s0", "file2.txt"};
 
     rxOne.Start();
-//    rxTwo.Start();
+    rxTwo.Start();
 
 //    std::this_thread::sleep_for(std::chrono::milliseconds(2000));
     //m_condVariable.notify_all();
