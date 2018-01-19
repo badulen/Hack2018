@@ -1,4 +1,3 @@
-
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
@@ -23,9 +22,8 @@
  *--------------------------------------------------------------------------------------*/
 int main(int argc, char* argv[])
 {
-    int debug = 0;
     int dgramsize = 0;
-    char buf[100000];
+    unsigned char buf[1500*128];
     int kill_percentage;
     char tx_mcast_dest[18];
     char rx_mcast_dest[18];
@@ -44,13 +42,14 @@ int main(int argc, char* argv[])
     enum {MODE_MCAST, MODE_SSM} input_mode;
     int yes = 1;
     int error = 0;
-    char ifr[] = "p3p1";
+    char ifr[] = "eth1";
     //char ifr[] = "eno1";
     input_mode = MODE_MCAST;
-
-  /* argv[1] = input filename */
+    int buf_index = 0;
+    int packets_passed = 0;
+    int packets_dropped = 0;  /* argv[1] = input filename */
   /* argv[2] = output filename */
-
+    int randmax = 0;
 
     if (argc != 6)
     {
@@ -65,13 +64,13 @@ int main(int argc, char* argv[])
         exit(1);
 
     }
-        printf("rx port = %d \n", rx_port);
+    printf("rx port = %d \n", rx_port);
 
-        // set rx mcast group addr
+    // set rx mcast group addr
     strncpy(rx_mcast_dest, argv[2], 16);
-        printf("rxmcastdest = %s\n", rx_mcast_dest);
+    printf("rxmcastdest = %s\n", rx_mcast_dest);
 
-        // set rx mcast ssm src addr
+    // set rx mcast ssm src addr
 //    strncpy(rx_mcast_src, argv[3], 16);
 //        printf("rxmcastsrc = %s\n", rx_mcast_src);
 
@@ -80,11 +79,11 @@ int main(int argc, char* argv[])
         printf("Bad tx port \"%s\" \n", argv[3]);
         exit(1);
     }
-        printf("tx port = %d \n", tx_port);
+    printf("tx port = %d \n", tx_port);
 
-        // set tx mcast group addr
+    // set tx mcast group addr
     strncpy(tx_mcast_dest, argv[4], 16);
-        printf("txmcastdest = %s\n", tx_mcast_dest);
+    printf("txmcastdest = %s\n", tx_mcast_dest);
 
 
     if (sscanf(argv[5], "%d", &kill_percentage) != 1)
@@ -92,10 +91,10 @@ int main(int argc, char* argv[])
         printf("Bad <%% of packets to kill> \"%s\"\n", argv[5]);
         exit(1);
     }
-        printf("percentage bad = %d\n", kill_percentage);
+    printf("percentage bad = %d\n", kill_percentage);
 
     //rx socket
-    if ((error = (rx_sock = socket(AF_INET, SOCK_DGRAM, IPPROTO_IP))) < 0)
+    if ((error = (rx_sock = socket(AF_INET, SOCK_DGRAM, 0))) < 0)
     {
         printf("rx socket() creation failed with error %d\n", error);
         return 1;
@@ -103,13 +102,13 @@ int main(int argc, char* argv[])
 
 
     if ((error = setsockopt(rx_sock, SOL_SOCKET, SO_BINDTODEVICE, (void *)&ifr, sizeof(ifr))) < 0)
-        {
-                printf("rx setsockopt() SO_BINDTODEVICE failed with error %d\n", error);
-                return 1;
-        }
+    {
+        printf("rx setsockopt() SO_BINDTODEVICE failed with error %d\n", error);
+        return 1;
+    }
     if ((error = setsockopt(rx_sock, SOL_SOCKET, SO_REUSEADDR, &yes, sizeof(int))) < 0)
     {
-                printf("rx setsockopt() SO_REUSEADDR failed with error %d\n", error);
+        printf("rx setsockopt() SO_REUSEADDR failed with error %d\n", error);
     }
 
 
@@ -118,7 +117,6 @@ int main(int argc, char* argv[])
     rx_sa.sin_addr.s_addr = INADDR_ANY;
 
     if ((error = bind(rx_sock, (struct sockaddr*)&rx_sa, sizeof(rx_sa))) < 0)
-
     {
         printf("rx bind() failed with error %d\n", error);
         close(rx_sock);
@@ -126,7 +124,7 @@ int main(int argc, char* argv[])
     }
 
     //tx socket
-      if ((error = (tx_sock = socket(AF_INET, SOCK_DGRAM, 0))) < 0)
+    if ((error = (tx_sock = socket(AF_INET, SOCK_DGRAM, 0))) < 0)
     {
         printf("tx socket() creation failed with error %d\n", error);
         return 1;
@@ -137,8 +135,8 @@ int main(int argc, char* argv[])
 
     if ((error = setsockopt(tx_sock, SOL_SOCKET, SO_BINDTODEVICE, (void *)&ifr, sizeof(ifr))) < 0)
     {
-            printf("tx setsockopt() failed with error %d\n", error);
-            return 1;
+        printf("tx setsockopt() failed with error %d\n", error);
+        return 1;
     }
 
     tx_sa.sin_family = AF_INET;
@@ -158,19 +156,17 @@ int main(int argc, char* argv[])
     if (input_mode == MODE_MCAST)
     {
             //Join multicast group
-            mreq.imr_multiaddr.s_addr = inet_addr(rx_mcast_dest);
-            mreq.imr_interface.s_addr = htonl(INADDR_ANY);
-            if ((error = setsockopt(rx_sock, IPPROTO_IP, IP_ADD_MEMBERSHIP, (char*)&mreq,
-                    sizeof(struct ip_mreq))) < 0)
-            {
-                    printf("setsockopt - IP_ADD_MEMBERSHIP Error %d", error);
-                    exit(1);
-            }
+        mreq.imr_multiaddr.s_addr = inet_addr(rx_mcast_dest);
+        mreq.imr_interface.s_addr = htonl(INADDR_ANY);
+        if ((error = setsockopt(rx_sock, IPPROTO_IP, IP_ADD_MEMBERSHIP, (char*)&mreq,
+            sizeof(struct ip_mreq))) < 0)
+        {
+            printf("setsockopt - IP_ADD_MEMBERSHIP Error %d", error);
+            exit(1);
+        }
     }
-
-      else if (input_mode == MODE_SSM)
-
-      {
+    else if (input_mode == MODE_SSM)
+    {
         //Join SSM multicast group
         //or use IP_ADD_SOURCE_MEMBERSHIP for SSM
 //        mreq_source.imr_multiaddr.s_addr = inet_addr(rx_mcast_dest);
@@ -182,29 +178,45 @@ int main(int argc, char* argv[])
 //            printf("setsockopt - IP_ADD_MEMBERSHIP Error %d", error);
 //            exit(1);
 //        }
-      }
+    }
 
-      rx_salen = sizeof(rx_sa);
+    rx_salen = sizeof(rx_sa);
 
-        printf("Ready to receive\n");
+    printf("Ready to receive\n");
 
-  //copy some packets to the output
+    //copy some packets to the output
     while(1)
     {
         int send_output = 0;
+        int randval;
 
-        dgramsize = recvfrom(rx_sock, buf, 1500, 0, (struct sockaddr*)&rx_sa, &rx_salen);
+        char* pbuf = buf + buf_index*1500;
 
-        if (debug) printf(".");
+        dgramsize = recvfrom(rx_sock, (char*)pbuf, 1500, 0, (struct sockaddr*)&rx_sa, &rx_salen);
+
+//        printf("seq %x%x\n", pbuf[2], pbuf[3]);
 
         send_output = 1;
-//        if (((rand() * 10000) < (kill_percentage * 32767) || (kill_percentage == 10000)))
-//            send_output = 0;
+        randval = rand();
+
+        if (((randval) < (kill_percentage * 214748) || (kill_percentage == 10000)))
+            send_output = 0;
 
         if (send_output) {
-            sendto(tx_sock, buf, dgramsize, 0, (struct sockaddr*)&tx_sa, tx_salen);
+            sendto(tx_sock, (char*)pbuf, dgramsize, 0, (struct sockaddr*)&tx_sa, tx_salen);
 
-            if (debug) printf("dgramsize %d\n", dgramsize);
+//        printf(".");
+//            printf("dgramsize %d\n", dgramsize);
+            packets_passed++;
+        }
+        else
+            packets_dropped++;
+
+        buf_index++;
+        if (buf_index == 128)
+        {
+            printf("Packets Passed %d dropped %d\n", packets_passed, packets_dropped);
+            buf_index = 0;
         }
     }
 
